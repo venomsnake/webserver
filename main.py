@@ -1,5 +1,12 @@
+"""
+Refrence = https://defn.io/2018/02/25/web-app-from-scratch-01/
+
+"""
+
 import socket
 import typing
+import mimetypes
+import os
 
 HOST = "localhost"
 PORT = 9000
@@ -32,6 +39,49 @@ Content-length: 17
 
 Method Not Allowed""".replace(b"\n", b"\r\n")
 
+# Server root constant and serve file function to represent file pos
+
+SERVER_ROOT = os.path.abspath("www")
+
+FILE_RESPONSE_TEMPLATE = """\
+HTTP/1.1 200 OK
+Content-type: {content_type}
+Content-length: {content_length}
+
+""".replace("\n", "\r\n")
+
+def serve_file(sock: socket.socket, path: str) -> None:
+    """given socket and the relative path, send that file to the socket
+       if file exists, if the file doesn't exist, send 404."""
+    
+    if path == "/":
+        path = "index.html"
+
+    abspath = os.path.normpath(os.path.join(SERVER_ROOT, path.lstrip("/")))
+    if not abspath.startswith(SERVER_ROOT):
+        sock.sendall(NOT_FOUND_RESPONSE)
+        return
+    
+    try:
+        with open(abspath, "rb") as f:
+            stat = os.fstat(f.fileno())
+            content_type, encoding = mimetypes.guess_type(abspath)
+            if content_type is None:
+                content_type = "application/octet-stream"
+
+            if encoding is not None:
+                content_type += f"; charset={encoding}"
+
+            response_headers = FILE_RESPONSE_TEMPLATE.format(
+                content_type=content_type,
+                content_length=stat.st_size,
+            ).encode("ascii")
+
+            sock.sendall(response_headers)
+            sock.sendfile(f)
+    except FileNotFoundError:
+        sock.sendall(NOT_FOUND_RESPONSE)
+        return
 
 # Request abstraction read files off disk
 
@@ -125,7 +175,7 @@ with socket.socket() as server_sock:
             try:
                 request = Request.from_socket(client_sock)
                 print(request)
-                client_sock.sendall(RESPONSE)
+                client_sock.sendall(NOT_FOUND_RESPONSE)
             except Exception as e:
                 print(f"Failed to parse request: {e}")
                 client_sock.sendall(BAD_REQUEST_RESPONSE)
