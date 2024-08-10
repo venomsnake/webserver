@@ -64,6 +64,7 @@ def serve_file(sock: socket.socket, path: str) -> None:
     
     try:
         with open(abspath, "rb") as f:
+            #figure out its mime type and size (using os.fstat)
             stat = os.fstat(f.fileno())
             content_type, encoding = mimetypes.guess_type(abspath)
             if content_type is None:
@@ -174,8 +175,11 @@ with socket.socket() as server_sock:
             #for reqest_line in iter_lines(client_sock):print(request_line)
             try:
                 request = Request.from_socket(client_sock)
-                print(request)
-                client_sock.sendall(NOT_FOUND_RESPONSE)
+                if request.method != "GET":
+                    client_sock.sendall(METHOD_NOT_ALLOWED_RESPONSE)
+                    continue
+
+                serve_file(client_sock, request.path)
             except Exception as e:
                 print(f"Failed to parse request: {e}")
                 client_sock.sendall(BAD_REQUEST_RESPONSE)
