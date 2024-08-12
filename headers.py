@@ -1,6 +1,8 @@
 import typing
 from collections import defaultdict
 
+HeadersDict = typing.Dict[str, typing.List[str]]
+HeadersGenerator = typing.Generator[typing.Tuple[str, str], None, None]
 # Header class definition: To handle muliple values for single header
 
 class Headers:
@@ -18,3 +20,9 @@ class Headers:
             return self.get_all(name)[-1]
         except IndexError:
             return default
+
+# Iterate over all the headers
+    def __iter__(Self) -> HeadersGenerator:
+        for name, values in Self._headers.items():
+            for value in values:
+                yield name, value

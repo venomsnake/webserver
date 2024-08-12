@@ -39,7 +39,7 @@ Not Found""".replace(b"\n", b"\r\n")
 METHOD_NOT_ALLOWED_RESPONSE = b"""\
 HTTP/1.1 405 Method Not Allowed
 Content-type: text/plain
-Content-length: 17
+Content-length: 18
 
 Method Not Allowed""".replace(b"\n", b"\r\n")
 
@@ -63,7 +63,8 @@ def serve_file(sock: socket.socket, path: str) -> None:
 
     abspath = os.path.normpath(os.path.join(SERVER_ROOT, path.lstrip("/")))
     if not abspath.startswith(SERVER_ROOT):
-        sock.sendall(NOT_FOUND_RESPONSE)
+        response = Response(status="404 Not Found", content="Not Found")
+        response.send(sock)
         return
     
     try:
@@ -77,25 +78,13 @@ def serve_file(sock: socket.socket, path: str) -> None:
             if encoding is not None:
                 content_type += f"; charset={encoding}"
 
-            response_headers = FILE_RESPONSE_TEMPLATE.format(
-                content_type=content_type,
-                content_length=stat.st_size,
-            ).encode("ascii")
-
-            sock.sendall(response_headers)
-            '''
-            # Send the file content manually in chunks
-            chunk_size = 4096
-            while True:
-                chunk = f.read(chunk_size)
-                if not chunk:
-                    break
-                sock.sendall(chunk)
-            '''
-            sock.sendfile(f)
-                
+            response = Response(status="200 OK", body=f)
+            response.headers.add("content-type", content_type)
+            response.send(sock)
+            return
     except FileNotFoundError:
-        sock.sendall(NOT_FOUND_RESPONSE)
+        response = Response(status="404 Not Found", content="Not Found")
+        response.send(sock)
         return
 
 # Response class definition
@@ -132,8 +121,28 @@ class Response:
 
     def send(self,sock: socket.socket) -> None:
         """Respone to Socket."""
+        content_length = self.headers.get("content-length")
 
-        raise NotImplementedError
+        if content_length is None:
+            try:
+                body_stat = os.fstat(self.body.fileno())
+                content_length = body_stat.st_size
+            except OSError:
+                self.body.seek(0, os.SEEK_END)
+                content_length = self.body.tell()
+                self.body.seek(0, os.SEEK_SET)
+
+            if content_length > 0:
+                self.headers.add("content-length", content_length)
+
+        headers = b"HTTP/1.1 " + self.status + b"\r\n"
+        for header_name, header_value in self.headers:
+            headers += f"{header_name}: {header_value}\r\n".encode()
+        
+        sock.sendall(headers + b"\r\n")
+        if content_length >0:
+            sock.sendfile(self.body)
+        
 
 
 with socket.socket() as server_sock:
@@ -164,12 +173,10 @@ with socket.socket() as server_sock:
             #for reqest_line in iter_lines(client_sock):print(request_line)
             try:
                 request = Request.from_socket(client_sock)
-                print(f"Received request: {request.method} {request.path}")
-
-                ''' Implenting 100 continue
-                '''
+                print(f"request recieved {request.path}:{request.method}")
                 if "100-continue" in request.headers.get("expect", ""):
-                    client_sock.sendall(b"HTTP/1.1 100 Continue\r\n\r\n")
+                    response = Response(status="100 Continue")
+                    response.send(client_sock)
 
                 try:
                     content_length = int(request.headers.get("content-length", "0"))
@@ -181,10 +188,12 @@ with socket.socket() as server_sock:
                     print("Request body", body)
 
                 if request.method != "GET":
-                    client_sock.sendall(METHOD_NOT_ALLOWED_RESPONSE)
+                    response = Response(status="405 Method Not Allowed", content="Method Not Allowed")
+                    response.send(client_sock)
                     continue
 
                 serve_file(client_sock, request.path)
             except Exception as e:
                 print(f"Failed to parse request: {e}")
-                client_sock.sendall(BAD_REQUEST_RESPONSE)
+                response = Response(status="400 Bad Request", content="Bad Request")
+                response.send(client_sock)
