@@ -11,6 +11,7 @@ import os
 from request import Request
 from headers import Headers
 import io
+import platform
 
 HOST = "localhost"
 PORT = 9000
@@ -100,6 +101,7 @@ class Response:
         provided, then body is ignored.
       encoding: An encoding for the content, if provided.
     """
+
     def __init__(
             self,
             status: str,
@@ -119,10 +121,10 @@ class Response:
         else:
             self.body = body
 
-    def send(self,sock: socket.socket) -> None:
-        """Respone to Socket."""
+    def send(self, sock: socket.socket) -> None:
+        """Write this response to a socket.
+        """
         content_length = self.headers.get("content-length")
-
         if content_length is None:
             try:
                 body_stat = os.fstat(self.body.fileno())
@@ -141,7 +143,15 @@ class Response:
         
         sock.sendall(headers + b"\r\n")
         if content_length >0:
-            sock.sendfile(self.body)
+            if platform.system() == "Windows":
+                # Manually read and send the file in chunks for windows
+                while True:
+                    chunk = self.body.read(4096) # Change it accordingly or make dynamic mem reader
+                    if not chunk:
+                        break
+                    sock.sendall(chunk)
+            else:
+                sock.sendfile(self.body)
         
 
 
@@ -153,7 +163,7 @@ with socket.socket() as server_sock:
     server_sock.bind((HOST, PORT))
 
     # Set timeout for connection
-    server_sock.settimeout(20)
+    # server_sock.settimeout(20)
 
     # 0 is the number of pending connections the socket may have before
     # new connections are refused.  Since this server is going to process
@@ -173,7 +183,7 @@ with socket.socket() as server_sock:
             #for reqest_line in iter_lines(client_sock):print(request_line)
             try:
                 request = Request.from_socket(client_sock)
-                print(f"request recieved {request.path}:{request.method}")
+                #print(f"request recieved {request.path}:{request.method}")
                 if "100-continue" in request.headers.get("expect", ""):
                     response = Response(status="100 Continue")
                     response.send(client_sock)
