@@ -58,7 +58,7 @@ Content-length: {content_length}
 def serve_file(sock: socket.socket, path: str) -> None:
     """given socket and the relative path, send that file to the socket
        if file exists, if the file doesn't exist, send 404."""
-    
+
     if path == "/":
         path = "index.html"
 
@@ -67,7 +67,7 @@ def serve_file(sock: socket.socket, path: str) -> None:
         response = Response(status="404 Not Found", content="Not Found")
         response.send(sock)
         return
-    
+
     try:
         with open(abspath, "rb") as f:
             #figure out its mime type and size (using os.fstat)
@@ -140,9 +140,9 @@ class Response:
         headers = b"HTTP/1.1 " + self.status + b"\r\n"
         for header_name, header_value in self.headers:
             headers += f"{header_name}: {header_value}\r\n".encode()
-        
+
         sock.sendall(headers + b"\r\n")
-        if content_length >0:
+        if content_length > 0:
             if platform.system() == "Windows":
                 # Manually read and send the file in chunks for windows
                 while True:
@@ -152,7 +152,7 @@ class Response:
                     sock.sendall(chunk)
             else:
                 sock.sendfile(self.body)
-        
+
 
 
 with socket.socket() as server_sock:
