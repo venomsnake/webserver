@@ -1,10 +1,10 @@
 import io
 import socket
 import typing
-from collections import defaultdict
+
 from headers import Headers
 
-# BodyReader class definition
+#BodyReader Class definition
 class BodyReader(io.IOBase):
     def __init__(self, sock: socket.socket, *, buff: bytes = b"", bufsize: int = 16_384) -> None:
         self._sock = sock
@@ -15,18 +15,19 @@ class BodyReader(io.IOBase):
         return True
 
     def read(self, n: int) -> bytes:
-        """Read up to n number of bytes from the request body."""
+        """Read up to n number of bytes from the request body.
+        """
         while len(self._buff) < n:
             data = self._sock.recv(self._bufsize)
             if not data:
                 break
+
             self._buff += data
 
         res, self._buff = self._buff[:n], self._buff[n:]
         return res
-    
 
-# Request Class definition
+#Request Class Definition
 class Request(typing.NamedTuple):
     method: str
     path: str
@@ -72,39 +73,25 @@ class Request(typing.NamedTuple):
         return cls(method=method.upper(), path=path, headers=headers, body=body)
 
 
-# Updated iter_lines to handle partial and complete lines
-
 def iter_lines(sock: socket.socket, bufsize: int = 16_384) -> typing.Generator[bytes, None, bytes]:
+    """Given a socket, read all the individual CRLF-separated lines
+    and yield each one until an empty one is found.  Returns the
+    remainder after the empty line.
+    """
     buff = b""
     while True:
-        try:
-            # Try receiving data with a timeout of 5 seconds
-            sock.settimeout(5.0)
-            data = sock.recv(bufsize)
-        except socket.timeout:
-            print("Socket receive timeout, no data received within the specified time.")
-            return  # No data was received, so exit
-        except socket.error as e:
-            print(f"Socket error: {e}")
-            return  # Exit in case of socket errors
-
+        data = sock.recv(bufsize)
         if not data:
-            # If no more data, return the buffer
-            if buff:
-                if b"\r\n" in buff:
-                    while b"\r\n" in buff:
-                        i = buff.find(b"\r\n")
-                        line, buff = buff[:i], buff[i + 2:]
-                        if line:
-                            yield line
-                if buff:
-                    yield buff
-            return
+            return b""
 
         buff += data
-        # Process complete lines in the buffer
-        while b"\r\n" in buff:
-            i = buff.find(b"\r\n")
-            line, buff = buff[:i], buff[i + 2:]
-            if line:
+        while True:
+            try:
+                i = buff.index(b"\r\n")
+                line, buff = buff[:i], buff[i + 2:]
+                if not line:
+                    return buff
+
                 yield line
+            except IndexError:
+                break

@@ -1,65 +1,23 @@
-"""
-Refrence = https://defn.io/2018/02/25/web-app-from-scratch-01/
-2018/03/04
-2018/03/20
-
-"""
-import typing
-import socket
 import mimetypes
 import os
+import socket
+import typing
+
 from request import Request
-from headers import Headers
-import io
-import platform
+from response import Response
+from threading import Thread
+from queue import Queue, Empty
 
-HOST = "localhost"
-PORT = 9000
+SERVER_ROOT = "www"
 
-RESPONSE = b"""\
-HTTP/1.1 200 OK
-Content-type: text/html
-Content-length: 15
 
-<h1>Hello!</h1>""".replace(b"\n", b"\r\n")
-
-BAD_REQUEST_RESPONSE = b"""\
-HTTP/1.1 400 Bad Request
-Content-type: text/plain
-Content-length: 11
-
-Bad Request""".replace(b"\n", b"\r\n")
-
-NOT_FOUND_RESPONSE = b"""\
-HTTP/1.1 404 Not Found
-Content-type: text/plain
-Content-length: 9
-
-Not Found""".replace(b"\n", b"\r\n")
-
-METHOD_NOT_ALLOWED_RESPONSE = b"""\
-HTTP/1.1 405 Method Not Allowed
-Content-type: text/plain
-Content-length: 18
-
-Method Not Allowed""".replace(b"\n", b"\r\n")
-
-# Server root constant and serve file function to represent file pos
-
-SERVER_ROOT = os.path.abspath("www")
-
-FILE_RESPONSE_TEMPLATE = """\
-HTTP/1.1 200 OK
-Content-type: {content_type}
-Content-length: {content_length}
-
-""".replace("\n", "\r\n")
-
-# Updated serve_file function to handle connection errors
 def serve_file(sock: socket.socket, path: str) -> None:
-    """Serve a file from the server."""
+    """Given a socket and the relative path to a file (relative to
+    SERVER_ROOT), send that file to the socket if it exists.  If the
+    file doesn't exist, send a "404 Not Found" response.
+    """
     if path == "/":
-        path = "index.html"
+        path = "/index.html"
 
     abspath = os.path.normpath(os.path.join(SERVER_ROOT, path.lstrip("/")))
     if not abspath.startswith(SERVER_ROOT):
@@ -69,7 +27,6 @@ def serve_file(sock: socket.socket, path: str) -> None:
 
     try:
         with open(abspath, "rb") as f:
-            stat = os.fstat(f.fileno())
             content_type, encoding = mimetypes.guess_type(abspath)
             if content_type is None:
                 content_type = "application/octet-stream"
@@ -80,110 +37,43 @@ def serve_file(sock: socket.socket, path: str) -> None:
             response = Response(status="200 OK", body=f)
             response.headers.add("content-type", content_type)
             response.send(sock)
+            return
     except FileNotFoundError:
         response = Response(status="404 Not Found", content="Not Found")
         response.send(sock)
-    except ConnectionAbortedError:
-        print("Connection was aborted while serving the file.")
-    except ConnectionResetError:
-        print("Connection was reset while serving the file.")
-    except Exception as e:
-        print(f"Failed to serve file: {e}")
-
-# Response class definition
-
-# Updated Response class to handle ConnectionAbortedError
-class Response:
-    """An HTTP response."""
-
-    def __init__(self, status: str, headers: typing.Optional[Headers] = None, body: typing.Optional[typing.IO] = None,
-                 content: typing.Optional[str] = None, encoding: str = "utf-8") -> None:
-        self.status = status.encode()
-        self.headers = headers or Headers()
-        if content is not None:
-            self.body = io.BytesIO(content.encode(encoding))
-        elif body is None:
-            self.body = io.BytesIO()
-        else:
-            self.body = body
-        #Keep it alive 
-        self.headers.add("Connection", "keep-alive")
-
-    def send(self, sock: socket.socket) -> None:
-        """Write this response to a socket, handling connection errors."""
-        try:
-            content_length = self.headers.get("content-length")
-            if content_length is None:
-                try:
-                    body_stat = os.fstat(self.body.fileno())
-                    content_length = body_stat.st_size
-                except OSError:
-                    self.body.seek(0, os.SEEK_END)
-                    content_length = self.body.tell()
-                    self.body.seek(0, os.SEEK_SET)
-
-                if content_length > 0:
-                    self.headers.add("content-length", content_length)
-
-            # Prepare headers
-            headers = b"HTTP/1.1 " + self.status + b"\r\n"
-            for header_name, header_value in self.headers:
-                headers += f"{header_name}: {header_value}\r\n".encode()
-
-            sock.sendall(headers + b"\r\n")
-
-            # Send body data
-            if content_length > 0:
-                if platform.system() == "Windows":
-                    # Manually send file in chunks
-                    while True:
-                        chunk = self.body.read(4096)  # Adjust chunk size if needed
-                        if not chunk:
-                            break
-                        sock.sendall(chunk)
-                else:
-                    sock.sendfile(self.body)
-
-        except ConnectionAbortedError:
-            print("Connection was aborted by the client.")
-        except ConnectionResetError:
-            print("Connection was reset by the client.")
-        except Exception as e:
-            print(f"Error sending response: {e}")
+        return
 
 
+class HTTPWorker(Thread):
+    def __init__(self, connection_queue: Queue) -> None:
+        super().__init__(daemon=True)
 
+        self.connection_queue = connection_queue
+        self.running = False
 
-with socket.socket() as server_sock:
-    # This tells the kernel to reuse sockets that are in `TIME_WAIT` state.
-    server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    def stop(self) -> None:
+        self.running = False
 
-    # This tells the socket what address to bind to.
-    server_sock.bind((HOST, PORT))
+    def run(self) -> None:
+        self.running = True
+        while self.running:
+            try:
+                client_sock, client_addr = self.connection_queue.get(timeout=1)
+            except Empty:
+                continue
 
-    # Set timeout for connection
-    # server_sock.settimeout(20)
+            try:
+                self.handle_client(client_sock, client_addr)
+            except Exception as e:
+                print(f"Unhandled error: {e}")
+                continue
+            finally:
+                self.connection_queue.task_done()
 
-    # 0 is the number of pending connections the socket may have before
-    # new connections are refused.  Since this server is going to process
-    # one connection at a time, we want to refuse any additional connections.
-    server_sock.listen(0)
-    print(f"Listening on {HOST}:{PORT}...")
-    print(f"Go to : http://{HOST}:{PORT}")
-
-    #Accept the traffic and communicate with the client
-
-    while True:
-
-        client_sock, client_addr = server_sock.accept()
-        print(f"New Con from {client_addr}.")
-
-        # Using sendall to respond to the connection
+    def handle_client(self, client_sock: socket.socket, client_addr: typing.Tuple[str, int]) -> None:
         with client_sock:
-            #for reqest_line in iter_lines(client_sock):print(request_line)
             try:
                 request = Request.from_socket(client_sock)
-                #print(f"request recieved {request.path}:{request.method}")
                 if "100-continue" in request.headers.get("expect", ""):
                     response = Response(status="100 Continue")
                     response.send(client_sock)
@@ -200,10 +90,49 @@ with socket.socket() as server_sock:
                 if request.method != "GET":
                     response = Response(status="405 Method Not Allowed", content="Method Not Allowed")
                     response.send(client_sock)
-                    continue
+                    return
 
                 serve_file(client_sock, request.path)
             except Exception as e:
                 print(f"Failed to parse request: {e}")
                 response = Response(status="400 Bad Request", content="Bad Request")
                 response.send(client_sock)
+
+
+class HTTPServer:
+    def __init__(self, host="127.0.0.1", port=9000, worker_count=16) -> None:
+        self.host = host
+        self.port = port
+        self.worker_count = worker_count
+        self.worker_backlog = worker_count * 8
+        self.connection_queue = Queue(self.worker_backlog)
+
+    def serve_forever(self) -> None:
+        workers = []
+        for _ in range(self.worker_count):
+            worker = HTTPWorker(self.connection_queue)
+            worker.start()
+            workers.append(worker)
+
+        with socket.socket() as server_sock:
+            server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            server_sock.bind((self.host, self.port))
+            server_sock.listen(self.worker_backlog)
+            print(f"Listening on {self.host}:{self.port}...")
+            print(f"Go to : http://{self.host}:{self.port}")
+
+            while True:
+                try:
+                    self.connection_queue.put(server_sock.accept())
+                except KeyboardInterrupt:
+                    break
+
+        for worker in workers:
+            worker.stop()
+
+        for worker in workers:
+            worker.join(timeout=30)
+
+
+server = HTTPServer()
+server.serve_forever()
