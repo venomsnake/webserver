@@ -44,7 +44,6 @@ class Request(typing.NamedTuple):
 
         try:
             request_line = next(lines).decode("ascii")
-            print(f"Request Line: {request_line}")
         except StopIteration:
             raise ValueError("Request line missing.")
 
@@ -58,7 +57,6 @@ class Request(typing.NamedTuple):
         while True:
             try:
                 line = next(lines)
-                print(f"Header Line: {line.decode('ascii')}") 
             except StopIteration as e:
                 # StopIteration.value contains the return value of the generator.
                 buff = e.value
@@ -75,23 +73,23 @@ class Request(typing.NamedTuple):
 
 
 # Updated iter_lines to handle partial and complete lines
+
 def iter_lines(sock: socket.socket, bufsize: int = 16_384) -> typing.Generator[bytes, None, bytes]:
     buff = b""
     while True:
         try:
+            # Try receiving data with a timeout of 5 seconds
+            sock.settimeout(5.0)
             data = sock.recv(bufsize)
         except socket.timeout:
             print("Socket receive timeout, no data received within the specified time.")
-            if buff:
-                yield buff
-            return
+            return  # No data was received, so exit
         except socket.error as e:
             print(f"Socket error: {e}")
-            if buff:
-                yield buff
-            return
+            return  # Exit in case of socket errors
 
         if not data:
+            # If no more data, return the buffer
             if buff:
                 if b"\r\n" in buff:
                     while b"\r\n" in buff:
@@ -104,9 +102,9 @@ def iter_lines(sock: socket.socket, bufsize: int = 16_384) -> typing.Generator[b
             return
 
         buff += data
+        # Process complete lines in the buffer
         while b"\r\n" in buff:
             i = buff.find(b"\r\n")
             line, buff = buff[:i], buff[i + 2:]
             if line:
                 yield line
-

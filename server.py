@@ -106,7 +106,6 @@ class Response:
             self.body = io.BytesIO()
         else:
             self.body = body
-        
         #Keep it alive 
         self.headers.add("Connection", "keep-alive")
 
@@ -170,6 +169,7 @@ with socket.socket() as server_sock:
     # one connection at a time, we want to refuse any additional connections.
     server_sock.listen(0)
     print(f"Listening on {HOST}:{PORT}...")
+    print(f"Go to : http://{HOST}:{PORT}")
 
     #Accept the traffic and communicate with the client
 
