@@ -106,6 +106,9 @@ class Response:
             self.body = io.BytesIO()
         else:
             self.body = body
+        
+        #Keep it alive 
+        self.headers.add("Connection", "keep-alive")
 
     def send(self, sock: socket.socket) -> None:
         """Write this response to a socket, handling connection errors."""
