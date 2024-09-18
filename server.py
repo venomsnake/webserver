@@ -55,10 +55,9 @@ Content-length: {content_length}
 
 """.replace("\n", "\r\n")
 
+# Updated serve_file function to handle connection errors
 def serve_file(sock: socket.socket, path: str) -> None:
-    """given socket and the relative path, send that file to the socket
-       if file exists, if the file doesn't exist, send 404."""
-
+    """Serve a file from the server."""
     if path == "/":
         path = "index.html"
 
@@ -70,7 +69,6 @@ def serve_file(sock: socket.socket, path: str) -> None:
 
     try:
         with open(abspath, "rb") as f:
-            #figure out its mime type and size (using os.fstat)
             stat = os.fstat(f.fileno())
             content_type, encoding = mimetypes.guess_type(abspath)
             if content_type is None:
@@ -82,38 +80,26 @@ def serve_file(sock: socket.socket, path: str) -> None:
             response = Response(status="200 OK", body=f)
             response.headers.add("content-type", content_type)
             response.send(sock)
-            return
     except FileNotFoundError:
         response = Response(status="404 Not Found", content="Not Found")
         response.send(sock)
-        return
+    except ConnectionAbortedError:
+        print("Connection was aborted while serving the file.")
+    except ConnectionResetError:
+        print("Connection was reset while serving the file.")
+    except Exception as e:
+        print(f"Failed to serve file: {e}")
 
 # Response class definition
 
+# Updated Response class to handle ConnectionAbortedError
 class Response:
-    """An HTTP response.
+    """An HTTP response."""
 
-    Parameters:
-      status: The resposne status line (eg. "200 OK").
-      headers: The response headers.
-      body: A file containing the response body.
-      content: A string representing the response body.  If this is
-        provided, then body is ignored.
-      encoding: An encoding for the content, if provided.
-    """
-
-    def __init__(
-            self,
-            status: str,
-            headers: typing.Optional[Headers] = None,
-            body: typing.Optional[typing.IO] = None,
-            content: typing.Optional[str] = None,
-            encoding: str = "utf-8"
-    ) -> None:
-
+    def __init__(self, status: str, headers: typing.Optional[Headers] = None, body: typing.Optional[typing.IO] = None,
+                 content: typing.Optional[str] = None, encoding: str = "utf-8") -> None:
         self.status = status.encode()
         self.headers = headers or Headers()
-
         if content is not None:
             self.body = io.BytesIO(content.encode(encoding))
         elif body is None:
@@ -122,36 +108,47 @@ class Response:
             self.body = body
 
     def send(self, sock: socket.socket) -> None:
-        """Write this response to a socket.
-        """
-        content_length = self.headers.get("content-length")
-        if content_length is None:
-            try:
-                body_stat = os.fstat(self.body.fileno())
-                content_length = body_stat.st_size
-            except OSError:
-                self.body.seek(0, os.SEEK_END)
-                content_length = self.body.tell()
-                self.body.seek(0, os.SEEK_SET)
+        """Write this response to a socket, handling connection errors."""
+        try:
+            content_length = self.headers.get("content-length")
+            if content_length is None:
+                try:
+                    body_stat = os.fstat(self.body.fileno())
+                    content_length = body_stat.st_size
+                except OSError:
+                    self.body.seek(0, os.SEEK_END)
+                    content_length = self.body.tell()
+                    self.body.seek(0, os.SEEK_SET)
 
+                if content_length > 0:
+                    self.headers.add("content-length", content_length)
+
+            # Prepare headers
+            headers = b"HTTP/1.1 " + self.status + b"\r\n"
+            for header_name, header_value in self.headers:
+                headers += f"{header_name}: {header_value}\r\n".encode()
+
+            sock.sendall(headers + b"\r\n")
+
+            # Send body data
             if content_length > 0:
-                self.headers.add("content-length", content_length)
+                if platform.system() == "Windows":
+                    # Manually send file in chunks
+                    while True:
+                        chunk = self.body.read(4096)  # Adjust chunk size if needed
+                        if not chunk:
+                            break
+                        sock.sendall(chunk)
+                else:
+                    sock.sendfile(self.body)
 
-        headers = b"HTTP/1.1 " + self.status + b"\r\n"
-        for header_name, header_value in self.headers:
-            headers += f"{header_name}: {header_value}\r\n".encode()
+        except ConnectionAbortedError:
+            print("Connection was aborted by the client.")
+        except ConnectionResetError:
+            print("Connection was reset by the client.")
+        except Exception as e:
+            print(f"Error sending response: {e}")
 
-        sock.sendall(headers + b"\r\n")
-        if content_length > 0:
-            if platform.system() == "Windows":
-                # Manually read and send the file in chunks for windows
-                while True:
-                    chunk = self.body.read(4096) # Change it accordingly or make dynamic mem reader
-                    if not chunk:
-                        break
-                    sock.sendall(chunk)
-            else:
-                sock.sendfile(self.body)
 
 
 

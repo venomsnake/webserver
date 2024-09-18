@@ -1,7 +1,6 @@
 import io
 import socket
 import typing
-
 from collections import defaultdict
 from headers import Headers
 
@@ -16,13 +15,11 @@ class BodyReader(io.IOBase):
         return True
 
     def read(self, n: int) -> bytes:
-        """Read up to n number of bytes from the request body.
-        """
+        """Read up to n number of bytes from the request body."""
         while len(self._buff) < n:
             data = self._sock.recv(self._bufsize)
             if not data:
                 break
-
             self._buff += data
 
         res, self._buff = self._buff[:n], self._buff[n:]
@@ -73,41 +70,28 @@ class Request(typing.NamedTuple):
 
         body = BodyReader(sock, buff=buff)
         return cls(method=method.upper(), path=path, headers=headers, body=body)
-    
-# Request abstraction read files off disk
-'''
-def iter_lines(sock: socket.socket, bufsize: int = 16_384) -> typing.Generator[bytes, None, bytes]:
-    #read all lines until EOL
 
-    buff = b""
-    while True:
-        data = sock.recv(bufsize)
-        if not data:
-            return b""
-        
 
-        # Read data break into small lines when  EOL reached returns the data
-        buff += data
-        while True:
-            try:
-                i = buff.index(b"\r\n")
-                line, buff = buff[:i], buff[i + 2:]
-                if not line:
-                    return buff
+# Updated iter_lines to handle partial and complete lines
 
-                yield line
-            except IndexError:
-                break
-            '''
 def iter_lines(sock: socket.socket, bufsize: int = 16_384) -> typing.Generator[bytes, None, bytes]:
     buff = b""
     while True:
-        data = sock.recv(bufsize)
+        try:
+            # Try receiving data with a timeout of 5 seconds
+            sock.settimeout(5.0)
+            data = sock.recv(bufsize)
+        except socket.timeout:
+            print("Socket receive timeout, no data received within the specified time.")
+            return  # No data was received, so exit
+        except socket.error as e:
+            print(f"Socket error: {e}")
+            return  # Exit in case of socket errors
+
         if not data:
+            # If no more data, return the buffer
             if buff:
-                # Process remaining buffer if there's data left
                 if b"\r\n" in buff:
-                    # Find the position of the last line break
                     while b"\r\n" in buff:
                         i = buff.find(b"\r\n")
                         line, buff = buff[:i], buff[i + 2:]
