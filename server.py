@@ -2,14 +2,12 @@ import mimetypes
 import os
 import socket
 import typing
-
 from request import Request
 from response import Response
 from threading import Thread
 from queue import Queue, Empty
 
 SERVER_ROOT = "www"
-
 
 def serve_file(sock: socket.socket, path: str) -> None:
     """Given a socket and the relative path to a file (relative to
@@ -19,29 +17,42 @@ def serve_file(sock: socket.socket, path: str) -> None:
     if path == "/":
         path = "/index.html"
 
-    abspath = os.path.normpath(os.path.join(SERVER_ROOT, path.lstrip("/")))
-    if not abspath.startswith(SERVER_ROOT):
+    # Create an absolute path to the file
+    abspath = os.path.abspath(os.path.join(SERVER_ROOT, path.lstrip("/")))
+    
+    # Prevent access to files outside the SERVER_ROOT
+    if not abspath.startswith(os.path.abspath(SERVER_ROOT)):
         response = Response(status="404 Not Found", content="Not Found")
         response.send(sock)
         return
 
     try:
+        # Try to open the requested file
         with open(abspath, "rb") as f:
             content_type, encoding = mimetypes.guess_type(abspath)
+            
+            # Default content type if not detected
             if content_type is None:
                 content_type = "application/octet-stream"
-
+            
+            # Include charset if there's an encoding
             if encoding is not None:
                 content_type += f"; charset={encoding}"
 
+            # Create a response with status 200 and send headers
             response = Response(status="200 OK", body=f)
             response.headers.add("content-type", content_type)
             response.send(sock)
-            return
+
+            # `sendfile()` in the Response.send method handles file transfer,
+            # no need for additional chunked reading and sending.
+            
     except FileNotFoundError:
+        # File not found, send 404 response
         response = Response(status="404 Not Found", content="Not Found")
         response.send(sock)
         return
+
 
 
 class HTTPWorker(Thread):
@@ -72,31 +83,54 @@ class HTTPWorker(Thread):
 
     def handle_client(self, client_sock: socket.socket, client_addr: typing.Tuple[str, int]) -> None:
         with client_sock:
-            try:
-                request = Request.from_socket(client_sock)
-                if "100-continue" in request.headers.get("expect", ""):
-                    response = Response(status="100 Continue")
-                    response.send(client_sock)
+            client_sock.settimeout(10)  # Set a timeout to close idle connections
+            keep_alive = True  # Flag to handle persistent connection
 
+            while keep_alive:
                 try:
-                    content_length = int(request.headers.get("content-length", "0"))
-                except ValueError:
-                    content_length = 0
+                    request = Request.from_socket(client_sock)
 
-                if content_length:
-                    body = request.body.read(content_length)
-                    print("Request body", body)
+                    # Check for 'Connection' header
+                    connection_header = request.headers.get('connection', '').lower()
 
-                if request.method != "GET":
-                    response = Response(status="405 Method Not Allowed", content="Method Not Allowed")
+                    # Respond with 100 Continue if requested
+                    if "100-continue" in request.headers.get("expect", ""):
+                        response = Response(status="100 Continue")
+                        response.send(client_sock)
+
+                    # Handle body (if present)
+                    try:
+                        content_length = int(request.headers.get("content-length", "0"))
+                    except ValueError:
+                        content_length = 0
+
+                    if content_length:
+                        body = request.body.read(content_length)
+                        print("Request body", body)
+
+                    # Process the request (only GET supported in this case)
+                    if request.method == "GET":
+                        serve_file(client_sock, request.path)
+                    else:
+                        response = Response(status="405 Method Not Allowed", content="Method Not Allowed")
+                        response.send(client_sock)
+
+                    # Check if client wants to close the connection
+                    if connection_header == "close":
+                        keep_alive = False
+                    else:
+                        # Default behavior in HTTP/1.1 is to keep the connection open
+                        keep_alive = True
+
+                except socket.timeout:
+                    # Close connection after a timeout
+                    print(f"Connection timed out for {client_addr}")
+                    break
+                except Exception as e:
+                    print(f"Failed to parse request: {e}")
+                    response = Response(status="400 Bad Request", content="Bad Request")
                     response.send(client_sock)
-                    return
-
-                serve_file(client_sock, request.path)
-            except Exception as e:
-                print(f"Failed to parse request: {e}")
-                response = Response(status="400 Bad Request", content="Bad Request")
-                response.send(client_sock)
+                    break
 
 
 class HTTPServer:
