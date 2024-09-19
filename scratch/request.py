@@ -2,32 +2,33 @@ import io
 import socket
 import typing
 
-from headers import Headers
+from .headers import Headers
 
-#BodyReader Class definition
+
 class BodyReader(io.IOBase):
     def __init__(self, sock: socket.socket, *, buff: bytes = b"", bufsize: int = 16_384) -> None:
         self._sock = sock
         self._buff = buff
         self._bufsize = bufsize
 
-    def readable(self) -> bool:
+    def readable(self) -> bool:  # pragma: no cover
         return True
 
     def read(self, n: int) -> bytes:
-        """Read up to n number of bytes from the request body.
-        """
+        """Read up to n bytes from the request body."""
         while len(self._buff) < n:
-            data = self._sock.recv(self._bufsize)
-            if not data:
-                break
-
-            self._buff += data
+            try:
+                data = self._sock.recv(self._bufsize)
+                if not data:
+                    break
+                self._buff += data
+            except socket.error as e:
+                raise IOError(f"Socket error: {e}")
 
         res, self._buff = self._buff[:n], self._buff[n:]
         return res
 
-#Request Class Definition
+
 class Request(typing.NamedTuple):
     method: str
     path: str
@@ -47,6 +48,8 @@ class Request(typing.NamedTuple):
             request_line = next(lines).decode("ascii")
         except StopIteration:
             raise ValueError("Request line missing.")
+        except UnicodeDecodeError:
+            raise ValueError("Request line contains non-ASCII characters.")
 
         try:
             method, path, _ = request_line.split(" ")
@@ -59,13 +62,12 @@ class Request(typing.NamedTuple):
             try:
                 line = next(lines)
             except StopIteration as e:
-                # StopIteration.value contains the return value of the generator.
                 buff = e.value
                 break
 
             try:
-                name, _, value = line.decode("ascii").partition(":")
-                headers.add(name, value.lstrip())
+                name, value = line.decode("ascii").split(":", 1)
+                headers.add(name.strip(), value.lstrip())
             except ValueError:
                 raise ValueError(f"Malformed header line {line!r}.")
 
@@ -74,24 +76,26 @@ class Request(typing.NamedTuple):
 
 
 def iter_lines(sock: socket.socket, bufsize: int = 16_384) -> typing.Generator[bytes, None, bytes]:
-    """Given a socket, read all the individual CRLF-separated lines
-    and yield each one until an empty one is found.  Returns the
-    remainder after the empty line.
+    """Given a socket, read CRLF-separated lines and yield each one.
+
+    Stops when an empty line is found. Returns the remainder of the buffer after the empty line.
     """
     buff = b""
     while True:
-        data = sock.recv(bufsize)
-        if not data:
-            return b""
+        try:
+            data = sock.recv(bufsize)
+            if not data:
+                return b""
+            buff += data
+        except socket.error as e:
+            raise IOError(f"Socket error: {e}")
 
-        buff += data
         while True:
             try:
                 i = buff.index(b"\r\n")
                 line, buff = buff[:i], buff[i + 2:]
                 if not line:
-                    return buff
-
+                    return buff  # End of headers
                 yield line
-            except IndexError:
+            except (IndexError, ValueError):
                 break

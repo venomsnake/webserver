@@ -3,26 +3,29 @@ import os
 import socket
 import typing
 
-from headers import Headers
-
+from .headers import Headers
 
 class Response:
     """An HTTP response.
 
     Parameters:
-      status: The resposne status line (eg. "200 OK").
+      status: The response status line (eg. "200 OK").
       headers: The response headers.
       body: A file containing the response body.
-      content: A string representing the response body.  If this is
+      content: A string representing the response body. If this is
         provided, then body is ignored.
       encoding: An encoding for the content, if provided.
     """
+
+    status: bytes
+    headers: Headers
+    body: typing.IO[bytes]
 
     def __init__(
             self,
             status: str = "200 OK",
             headers: typing.Optional[Headers] = None,
-            body: typing.Optional[typing.IO] = None,
+            body: typing.Optional[typing.IO[bytes]] = None,
             content: typing.Optional[str] = None,
             encoding: str = "utf-8"
     ) -> None:
@@ -30,6 +33,7 @@ class Response:
         self.status = status.encode()
         self.headers = headers or Headers()
 
+        # Create body from content or provided file-like object
         if content is not None:
             self.body = io.BytesIO(content.encode(encoding))
         elif body is None:
@@ -40,23 +44,31 @@ class Response:
     def send(self, sock: socket.socket) -> None:
         """Write this response to a socket.
         """
+        # Fetch content-length, and calculate if not provided
         content_length = self.headers.get("content-length")
         if content_length is None:
             try:
                 body_stat = os.fstat(self.body.fileno())
                 content_length = body_stat.st_size
             except OSError:
+                # Fallback to manually calculating content length
                 self.body.seek(0, os.SEEK_END)
                 content_length = self.body.tell()
                 self.body.seek(0, os.SEEK_SET)
 
             if content_length > 0:
-                self.headers.add("content-length", content_length)
+                self.headers.add("content-length", str(content_length))
 
+        # Prepare the HTTP response headers
         headers = b"HTTP/1.1 " + self.status + b"\r\n"
-        for header_name, header_value in self.headers:
+        for header_name, header_value in self.headers.items():
             headers += f"{header_name}: {header_value}\r\n".encode()
 
+        # Send headers and body
         sock.sendall(headers + b"\r\n")
-        if content_length > 0:
-            sock.sendfile(self.body)
+        if content_length and content_length > 0:
+            try:
+                sock.sendfile(self.body)  # Works on platforms supporting sendfile
+            except AttributeError:
+                # Fallback for platforms where sendfile is unavailable
+                sock.sendall(self.body.read())

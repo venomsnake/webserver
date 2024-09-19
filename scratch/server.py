@@ -3,12 +3,12 @@ import mimetypes
 import os
 import socket
 import typing
-
-from request import Request
-from response import Response
+from queue import Empty, Queue
 from threading import Thread
 from typing import Callable, List, Tuple
-from queue import Queue, Empty
+
+from .request import Request
+from .response import Response
 
 LOGGER = logging.getLogger(__name__)
 
@@ -77,12 +77,12 @@ class HTTPWorker(Thread):
 
 class HTTPServer:
     def __init__(self, host="127.0.0.1", port=9000, worker_count=16) -> None:
-        self.handlers = []
+        self.handlers: List[Tuple[str, HandlerT]] = []
         self.host = host
         self.port = port
         self.worker_count = worker_count
         self.worker_backlog = worker_count * 8
-        self.connection_queue = Queue(self.worker_backlog)
+        self.connection_queue: Queue = Queue(self.worker_backlog)
 
     def mount(self, path_prefix: str, handler: HandlerT) -> None:
         """Mount a request handler at a particular path.  Handler
@@ -147,22 +147,3 @@ def serve_static(server_root: str) -> HandlerT:
             return Response(status="404 Not Found", content="Not Found")
 
     return handler
-
-
-def wrap_auth(handler: HandlerT) -> HandlerT:
-    def auth_handler(request: Request) -> Response:
-        authorization = request.headers.get("authorization", "")
-        if authorization.startswith("Bearer ") and authorization[len("Bearer "):] == "opensesame":
-            return handler(request)
-        return Response(status="403 Forbidden", content="Forbidden!")
-    return auth_handler
-
-
-def app(request: Request) -> Response:
-    return Response(content="Hello!")
-
-
-server = HTTPServer()
-server.mount("/static", serve_static("www")),
-server.mount("", wrap_auth(app))
-server.serve_forever()
