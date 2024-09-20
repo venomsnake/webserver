@@ -10,6 +10,12 @@ from typing import Callable, List, Tuple
 from .request import Request
 from .response import Response
 
+logging.basicConfig(
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    level=logging.INFO,
+    handlers=[logging.StreamHandler()]
+)
+
 LOGGER = logging.getLogger(__name__)
 
 HandlerT = Callable[[Request], Response]

@@ -15,15 +15,14 @@ class BodyReader(io.IOBase):
         return True
 
     def read(self, n: int) -> bytes:
-        """Read up to n bytes from the request body."""
+        """Read up to n number of bytes from the request body.
+        """
         while len(self._buff) < n:
-            try:
-                data = self._sock.recv(self._bufsize)
-                if not data:
-                    break
-                self._buff += data
-            except socket.error as e:
-                raise IOError(f"Socket error: {e}")
+            data = self._sock.recv(self._bufsize)
+            if not data:
+                break
+
+            self._buff += data
 
         res, self._buff = self._buff[:n], self._buff[n:]
         return res
@@ -48,8 +47,6 @@ class Request(typing.NamedTuple):
             request_line = next(lines).decode("ascii")
         except StopIteration:
             raise ValueError("Request line missing.")
-        except UnicodeDecodeError:
-            raise ValueError("Request line contains non-ASCII characters.")
 
         try:
             method, path, _ = request_line.split(" ")
@@ -67,7 +64,7 @@ class Request(typing.NamedTuple):
 
             try:
                 name, value = line.decode("ascii").split(":", 1)
-                headers.add(name.strip(), value.lstrip())
+                headers.add(name, value.lstrip())
             except ValueError:
                 raise ValueError(f"Malformed header line {line!r}.")
 
@@ -76,26 +73,24 @@ class Request(typing.NamedTuple):
 
 
 def iter_lines(sock: socket.socket, bufsize: int = 16_384) -> typing.Generator[bytes, None, bytes]:
-    """Given a socket, read CRLF-separated lines and yield each one.
-
-    Stops when an empty line is found. Returns the remainder of the buffer after the empty line.
+    """Given a socket, read all the individual CRLF-separated lines
+    and yield each one until an empty one is found.  Returns the
+    remainder after the empty line.
     """
     buff = b""
     while True:
-        try:
-            data = sock.recv(bufsize)
-            if not data:
-                return b""
-            buff += data
-        except socket.error as e:
-            raise IOError(f"Socket error: {e}")
+        data = sock.recv(bufsize)
+        if not data:
+            return b""
 
+        buff += data
         while True:
             try:
                 i = buff.index(b"\r\n")
                 line, buff = buff[:i], buff[i + 2:]
                 if not line:
-                    return buff  # End of headers
+                    return buff
+
                 yield line
             except (IndexError, ValueError):
                 break
